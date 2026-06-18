@@ -1,0 +1,25 @@
+node_modules
+node_modules/
+./node_modules
+./utils/others
+utils/others/
+package-lock.json
+./tmp
+tmp/
+tmp
+
+# Entorno y secretos — NUNCA subir
+.env
+.env.*
+*.env
+
+# Certificados SSL
+certs/
+
+# Archivos subidos por usuarios
+uploads/
+
+# Archivos del sistema
+.DS_Store
+.fetch-client/
+*.zip
