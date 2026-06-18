@@ -13,8 +13,6 @@ tmp
 .env.*
 *.env
 
-# Certificados SSL
-certs/
 
 # Archivos subidos por usuarios
 uploads/
