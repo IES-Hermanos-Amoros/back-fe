@@ -22,4 +22,3 @@ uploads/
 # Archivos del sistema
 .DS_Store
 .fetch-client/
-*.zip
