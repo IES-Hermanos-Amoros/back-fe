@@ -22,7 +22,12 @@ const puppeteerOptions = {
         '--disable-extensions',
         '--disable-gpu',
         '--disable-dev-shm-usage',
-        '--window-size=1280x1696'
+        '--window-size=1280x1696',
+        // 🚀 NUEVOS FLAGS DE OPTIMIZACIÓN PARA RENDER
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',             // Fuerza a Chrome a usar un único proceso en Linux
+        '--disable-accelerated-2d-canvas'
     ]
 }
 
@@ -206,6 +211,18 @@ loginSAO = async(userData,result) => {
     try {
         const browser = await puppeteer.launch(puppeteerOptions);
         const page = await browser.newPage();
+
+        // 🚀 BLOQUEO MULTIMEDIA PARA AHORRAR RAM
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resourceType = req.resourceType();
+            if (['image', 'stylesheet', 'font', 'media', 'analytics'].includes(resourceType)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+
         await page.goto(urlBase + 'index.php', { waitUntil: 'networkidle2' });
         await eliminarCookies(page)
         //await setTimeout(TIEMPO_ESPERA);
@@ -581,7 +598,7 @@ exports.companiesSinc = async(io,res,userData,result) => {
         console.log("Empresas en MongoDB: ",empresasMongoDB.length)
         io.emit('progress-update', { progress, message:`Empresas en MongoDB: ${empresasMongoDB.length}` });
         //res.write(`data: {"message": "Empresas Totales en BBDD local (MongoDB):${empresasMongoDB.length}"}\n\n`);
-        const page = respLogin.page
+        let page = respLogin.page
         //res.write('Obteniendo links de empresas...\n');  
         //res.write('data: {"message": "Obteniendo Links de Empresas..."}\n\n');
         const companiesLinks = await getSAOCompaniesLinks(page)
@@ -597,9 +614,186 @@ exports.companiesSinc = async(io,res,userData,result) => {
             updatedCompanies:[]
         }
 
+        let linkCounter = 0; // 🚀 Contador de enlaces procesados
+
         for(let companyLink of companiesLinks){
             try {
                 if(companyLink.link){
+                    // 🚀 CADA 20 ENLACES, REINICIAMOS LA PESTAÑA PARA VACIAR LA RAM
+                    linkCounter++;
+                    if (linkCounter % 20 === 0) {
+                        console.log("Reiniciando pestaña para liberar memoria RAM...");
+                        // 1. Conseguimos la instancia del navegador antes de cerrar la pestaña
+                        const browserInstance = page.browser(); 
+                        // 2. Cerramos la pestaña saturada
+                        await page.close(); 
+                        // 3. Abrimos una limpia usando la instancia del navegador
+                        page = await browserInstance.newPage(); 
+                        // 4. Volvemos a activar el bloqueador de elementos pesados
+                        await page.setRequestInterception(true);
+                        page.on('request', (r) => {
+                            if (['image', 'stylesheet', 'font', 'media', 'analytics'].includes(r.resourceType())) {
+                                r.abort();
+                            } else {
+                                r.continue();
+                            }
+                        });
+                    }
+                    //await setTimeout(TIEMPO_ESPERA);       
+                    await page.goto(companyLink.link, { waitUntil: 'networkidle2' })
+
+                    const content = await page.content();
+                    const $ = cheerio.load(content);
+                    
+                    const datos = extraerDatosEmpresa($)
+                    if(datos){
+                        progress += incremento;
+                        io.emit('progress-update', { progress, message:`Cargando empresa '${datos.SAO_id + " " +  datos.SAO_name}'...` });
+                        //console.log(datos)
+                        datos.SAO_registryDate = stringToDate(companyLink.registrado)
+                        datos.SAO_accessDate = stringToDate(companyLink.ultimoAcceso)                        
+                        //res.write(`Empresa SAO: ${JSON.stringify(datos)}\n\n`);
+                        //Si tenemos datos de la empresa, voy a comprobar si existe en MongoDB
+                        const empresaEnMongo = empresasMongoDB.find(emp => emp.SAO_id === datos.SAO_id);
+                        //console.log(empresaEnMongo)                        
+                        //Si NO existe en mongoDB, será una nueva empresa
+                        if(!empresaEnMongo){
+                            console.log(datos)
+                            companiesInfo.newCompanies.push(new SAO_Data_Company(datos.SAO_id, datos.SAO_profile, datos.SAO_username, datos.SAO_registryDate, datos.SAO_accessDate, datos.SAO_name, datos.SAO_organization, null, datos.SAO_email, datos.SAO_phone, datos.SAO_company_FCT_Number, datos.SAO_company_FCT_Date, datos.SAO_company_FPDual_Number, datos.SAO_company_FPDual_Date, datos.SAO_company_fax, datos.SAO_company_city, datos.SAO_company_state, datos.SAO_company_codeState, datos.SAO_company_address, datos.SAO_company_activity, datos.SAO_company_nameManager, datos.SAO_company_idManager, datos.SAO_company_notaryState, datos.SAO_company_notaryCity, datos.SAO_company_notaryName, datos.SAO_company_protocolNumber, datos.SAO_company_deedDate));
+                        } else {
+                            //Si Existe en MongoDB, comprobamos si se ha modificado algún campo                            
+                            console.log(datos.SAO_id + " " +  datos.SAO_name)                            
+                            const SAO_MODIFIED_FIELDS = Object.keys(datos).filter(key => {
+                                // Comprobamos si el campo es de tipo Date                               
+                                if (empresaEnMongo[key] instanceof Date) {
+                                    // Convertimos datos[key] a un objeto Date (si es una cadena con formato válido)
+                                    const fechaDatos = new Date(datos[key]);                            
+                                    // Comprobamos si la conversión fue exitosa (es decir, si no es una fecha inválida)
+                                    if (isNaN(fechaDatos)) {
+                                        // Si datos[key] no es una fecha válida, lo tratamos como una cadena
+                                        return String(empresaEnMongo[key]).trim() !== String(datos[key]).trim();
+                                    }                            
+                                    // Comparamos las fechas: empresaEnMongo es un Date, datos[key] es ahora un Date
+                                    return empresaEnMongo[key].getTime() !== fechaDatos.getTime();
+                                }
+                                
+                                // Si no es de tipo Date, seguimos la comparación de cadenas
+                                return (String(empresaEnMongo[key] || "").trim()) !== (String(datos[key] || "").trim());
+                            }).map(key => {
+                                return {
+                                    field: key,
+                                    DB_Value: empresaEnMongo[key],
+                                    SAO_Value: datos[key]
+                                };
+                            });
+                              
+                            //Si se ha modificado, añadimos la empresa
+                            if (SAO_MODIFIED_FIELDS.length > 0) {
+                                console.log(SAO_MODIFIED_FIELDS)
+                                // Si hay campos modificados, añadimos la empresa a updatedCompanies con los campos modificados
+                                const empresaModificada = { ...new SAO_Data_Company(datos.SAO_id, datos.SAO_profile, datos.SAO_username, datos.SAO_registryDate, datos.SAO_accessDate, datos.SAO_name, datos.SAO_organization, null, datos.SAO_email, datos.SAO_phone, datos.SAO_company_FCT_Number, datos.SAO_company_FCT_Date, datos.SAO_company_FPDual_Number, datos.SAO_company_FPDual_Date, datos.SAO_company_fax, datos.SAO_company_city, datos.SAO_company_state, datos.SAO_company_codeState, datos.SAO_company_address, datos.SAO_company_activity, datos.SAO_company_nameManager, datos.SAO_company_idManager, datos.SAO_company_notaryState, datos.SAO_company_notaryCity, datos.SAO_company_notaryName, datos.SAO_company_protocolNumber, datos.SAO_company_deedDate), SAO_MODIFIED_FIELDS };
+                                companiesInfo.updatedCompanies.push(empresaModificada);
+                            }                            
+                        }
+                    }                    
+                }
+            } catch (error) {
+                console.log("Error leyendo una empresa: " + companyLink.link + ". Desc: " + error.message)
+                io.emit('progress-update', { progress, message:"Error cargando info de empresas: "  + companyLink.link + ". Desc: " + error.message });       
+            }
+        }
+        
+        // 🚀 CIERRE DEFINITIVO DEL NAVEGADOR AL COMPLETAR EL BUCE
+        try {
+            const browserInstance = page.browser();
+            await page.close();
+            await browserInstance.close();
+            console.log("Navegador de Puppeteer cerrado con éxito. RAM liberada.");
+        } catch (closeError) {
+            console.log("Error al intentar cerrar el navegador al final: " + closeError.message);
+        }
+
+        //res.write('data: {"message": "Proceso completado."}\n\n');
+        //res.end()
+        io.emit('progress-update', { progress:100, message:"Proceso completado." });
+        desconectarSockets(io)       
+        result(null,companiesInfo)
+
+    } else {
+        // ERROR DE LOGIN: También intentamos cerrar el navegador si loginSAO devolvió la página pero falló algo después
+        if (respLogin.page) {
+            try {
+                const browserInstance = respLogin.page.browser();
+                await respLogin.page.close();
+                await browserInstance.close();
+            } catch (closeError) {
+                console.log("Error cerrando navegador en bloque de error de login: " + closeError.message);
+            }
+        }
+
+        //res.write('data: {"error": "Hubo un error en el proceso."}\n\n');
+        //res.end()
+        io.emit('progress-update', { progress:100, message:"Error de login: "  + respLogin.error });
+        desconectarSockets(io)       
+        result(respLogin.error,null)
+    }  
+}
+
+exports.companiesSinc_OLD = async(io,res,userData,result) => {
+    //res.write('Login...\n');
+    //res.write('data: {"message": "Login..."}\n\n');
+    const respLogin = await loginSAO(userData) 
+
+    if(respLogin.ok) {          
+        let progress = 0;    
+        //res.write('data: {"message": "Login OK..."}\n\n');
+        //res.write('data: {"message": "Cargando empresas de la BBDD local (MongoDB)..."}\n\n');
+        const empresasMongoDB = await userManagerModel.findByFilter({SAO_profile:"EMPRESA"})
+        console.log("Empresas en MongoDB: ",empresasMongoDB.length)
+        io.emit('progress-update', { progress, message:`Empresas en MongoDB: ${empresasMongoDB.length}` });
+        //res.write(`data: {"message": "Empresas Totales en BBDD local (MongoDB):${empresasMongoDB.length}"}\n\n`);
+        let page = respLogin.page
+        //res.write('Obteniendo links de empresas...\n');  
+        //res.write('data: {"message": "Obteniendo Links de Empresas..."}\n\n');
+        const companiesLinks = await getSAOCompaniesLinks(page)
+        console.log("Empresas en SAO: ",companiesLinks.length)
+        io.emit('progress-update', { progress, message:`Empresas en SAO: ${companiesLinks.length}` });
+
+        let incremento = 100/companiesLinks.length
+        //res.write('Links de empresas totales:' + companiesLinks.length + '\n');  
+        //res.write(`data: {"message": "Links de Empresas Totales:${companiesLinks.length}"}\n\n`);
+        //Una vez tenemos los links de las empresas, vamos recorriendo, y abriendo, uno a uno para extraer su información
+        let companiesInfo = {
+            newCompanies:[],
+            updatedCompanies:[]
+        }
+
+        let linkCounter = 0; // 🚀 Contador de enlaces procesados
+        //let page = respLogin.page; // Recuperamos la página del login
+
+        for(let companyLink of companiesLinks){
+            try {
+                if(companyLink.link){
+                    // 🚀 CADA 20 ENLACES, REINICIAMOS LA PESTAÑA PARA VACIAR LA RAM
+                    linkCounter++;
+                    if (linkCounter % 20 === 0) {
+                        console.log("Reiniciando pestaña para liberar memoria RAM...");
+                        // 1. Conseguimos la instancia del navegador antes de cerrar la pestaña
+                        const browserInstance = page.browser(); 
+                        // 2. Cerramos la pestaña saturada
+                        await page.close(); 
+                        // 3. Abrimos una limpia usando la instancia del navegador
+                        page = await browserInstance.newPage(); 
+                        // 4. Volvemos a activar el bloqueador de elementos pesados
+                        await page.setRequestInterception(true);
+                        page.on('request', (r) => {
+                            if (['image', 'stylesheet', 'font', 'media', 'analytics'].includes(r.resourceType())) {
+                                r.abort();
+                            } else {
+                                r.continue();
+                            }
+                        });
+                    }
                     //await setTimeout(TIEMPO_ESPERA);       
                     await page.goto(companyLink.link, { waitUntil: 'networkidle2' })
 
