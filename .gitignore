@@ -23,3 +23,7 @@ uploads/
 
 
 .cache/
+
+# Añadidos los certificados
+.certs/
+certs/
