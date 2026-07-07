@@ -26,7 +26,7 @@ const puppeteerOptions = {
         // 🚀 NUEVOS FLAGS DE OPTIMIZACIÓN PARA RENDER
         '--no-first-run',
         '--no-zygote',
-        '--single-process',             // Fuerza a Chrome a usar un único proceso en Linux
+        //'--single-process',             // Fuerza a Chrome a usar un único proceso en Linux (Falla en LOCALHOST - Error de Cursor)
         '--disable-accelerated-2d-canvas'
     ]
 }
@@ -586,60 +586,47 @@ exports.loginService = async(userData,result) => {
 
 //----------------------------------------------------------------
 exports.companiesSinc = async(io,res,userData,result) => {
-    //res.write('Login...\n');
-    //res.write('data: {"message": "Login..."}\n\n');
     const respLogin = await loginSAO(userData) 
 
     if(respLogin.ok) {          
         let progress = 0;    
-        //res.write('data: {"message": "Login OK..."}\n\n');
-        //res.write('data: {"message": "Cargando empresas de la BBDD local (MongoDB)..."}\n\n');
         const empresasMongoDB = await userManagerModel.findByFilter({SAO_profile:"EMPRESA"})
         console.log("Empresas en MongoDB: ",empresasMongoDB.length)
         io.emit('progress-update', { progress, message:`Empresas en MongoDB: ${empresasMongoDB.length}` });
-        //res.write(`data: {"message": "Empresas Totales en BBDD local (MongoDB):${empresasMongoDB.length}"}\n\n`);
+        
         let page = respLogin.page
-        //res.write('Obteniendo links de empresas...\n');  
-        //res.write('data: {"message": "Obteniendo Links de Empresas..."}\n\n');
         const companiesLinks = await getSAOCompaniesLinks(page)
         console.log("Empresas en SAO: ",companiesLinks.length)
         io.emit('progress-update', { progress, message:`Empresas en SAO: ${companiesLinks.length}` });
 
         let incremento = 100/companiesLinks.length
-        //res.write('Links de empresas totales:' + companiesLinks.length + '\n');  
-        //res.write(`data: {"message": "Links de Empresas Totales:${companiesLinks.length}"}\n\n`);
-        //Una vez tenemos los links de las empresas, vamos recorriendo, y abriendo, uno a uno para extraer su información
+        
         let companiesInfo = {
             newCompanies:[],
             updatedCompanies:[]
         }
 
-        let linkCounter = 0; // 🚀 Contador de enlaces procesados
+        let linkCounter = 0; 
+        let ultimoProgresoEmitido = 0; 
 
         for(let companyLink of companiesLinks){
             try {
                 if(companyLink.link){
-                    // 🚀 CADA 20 ENLACES, REINICIAMOS LA PESTAÑA PARA VACIAR LA RAM
                     linkCounter++;
+                    
+                    // 🚀 LIMPIEZA DE MEMORIA SEGURA: Sin cerrar la pestaña para no romper los clics del controlador
                     if (linkCounter % 20 === 0) {
-                        console.log("Reiniciando pestaña para liberar memoria RAM...");
-                        // 1. Conseguimos la instancia del navegador antes de cerrar la pestaña
-                        const browserInstance = page.browser(); 
-                        // 2. Cerramos la pestaña saturada
-                        await page.close(); 
-                        // 3. Abrimos una limpia usando la instancia del navegador
-                        page = await browserInstance.newPage(); 
-                        // 4. Volvemos a activar el bloqueador de elementos pesados
-                        await page.setRequestInterception(true);
-                        page.on('request', (r) => {
-                            if (['image', 'stylesheet', 'font', 'media', 'analytics'].includes(r.resourceType())) {
-                                r.abort();
-                            } else {
-                                r.continue();
-                            }
-                        });
+                        console.log("Limpiando caché de la pestaña para liberar memoria RAM...");
+                        try {
+                            const client = await page.target().createCDPSession();
+                            await client.send('Network.clearBrowserCache');
+                            //await client.send('Network.clearBrowserCookies');
+                            await client.detach();
+                        } catch (cacheError) {
+                            console.log("No se pudo limpiar la caché en este ciclo: " + cacheError.message);
+                        }
                     }
-                    //await setTimeout(TIEMPO_ESPERA);       
+                    
                     await page.goto(companyLink.link, { waitUntil: 'networkidle2' })
 
                     const content = await page.content();
@@ -648,36 +635,32 @@ exports.companiesSinc = async(io,res,userData,result) => {
                     const datos = extraerDatosEmpresa($)
                     if(datos){
                         progress += incremento;
-                        io.emit('progress-update', { progress, message:`Cargando empresa '${datos.SAO_id + " " +  datos.SAO_name}'...` });
-                        //console.log(datos)
+                        
+                        // 🚀 CONTROL DE TRÁFICO: Emitimos al cliente solo cuando cambia el número entero
+                        if (Math.floor(progress) > ultimoProgresoEmitido) {
+                            ultimoProgresoEmitido = Math.floor(progress);
+                            io.emit('progress-update', { 
+                                progress: ultimoProgresoEmitido, 
+                                message: `Cargando empresa '${datos.SAO_id + " " +  datos.SAO_name}'...` 
+                            });
+                        }
+
                         datos.SAO_registryDate = stringToDate(companyLink.registrado)
                         datos.SAO_accessDate = stringToDate(companyLink.ultimoAcceso)                        
-                        //res.write(`Empresa SAO: ${JSON.stringify(datos)}\n\n`);
-                        //Si tenemos datos de la empresa, voy a comprobar si existe en MongoDB
+                        
                         const empresaEnMongo = empresasMongoDB.find(emp => emp.SAO_id === datos.SAO_id);
-                        //console.log(empresaEnMongo)                        
-                        //Si NO existe en mongoDB, será una nueva empresa
+                        
                         if(!empresaEnMongo){
-                            console.log(datos)
                             companiesInfo.newCompanies.push(new SAO_Data_Company(datos.SAO_id, datos.SAO_profile, datos.SAO_username, datos.SAO_registryDate, datos.SAO_accessDate, datos.SAO_name, datos.SAO_organization, null, datos.SAO_email, datos.SAO_phone, datos.SAO_company_FCT_Number, datos.SAO_company_FCT_Date, datos.SAO_company_FPDual_Number, datos.SAO_company_FPDual_Date, datos.SAO_company_fax, datos.SAO_company_city, datos.SAO_company_state, datos.SAO_company_codeState, datos.SAO_company_address, datos.SAO_company_activity, datos.SAO_company_nameManager, datos.SAO_company_idManager, datos.SAO_company_notaryState, datos.SAO_company_notaryCity, datos.SAO_company_notaryName, datos.SAO_company_protocolNumber, datos.SAO_company_deedDate));
                         } else {
-                            //Si Existe en MongoDB, comprobamos si se ha modificado algún campo                            
-                            console.log(datos.SAO_id + " " +  datos.SAO_name)                            
                             const SAO_MODIFIED_FIELDS = Object.keys(datos).filter(key => {
-                                // Comprobamos si el campo es de tipo Date                               
                                 if (empresaEnMongo[key] instanceof Date) {
-                                    // Convertimos datos[key] a un objeto Date (si es una cadena con formato válido)
                                     const fechaDatos = new Date(datos[key]);                            
-                                    // Comprobamos si la conversión fue exitosa (es decir, si no es una fecha inválida)
                                     if (isNaN(fechaDatos)) {
-                                        // Si datos[key] no es una fecha válida, lo tratamos como una cadena
                                         return String(empresaEnMongo[key]).trim() !== String(datos[key]).trim();
                                     }                            
-                                    // Comparamos las fechas: empresaEnMongo es un Date, datos[key] es ahora un Date
                                     return empresaEnMongo[key].getTime() !== fechaDatos.getTime();
                                 }
-                                
-                                // Si no es de tipo Date, seguimos la comparación de cadenas
                                 return (String(empresaEnMongo[key] || "").trim()) !== (String(datos[key] || "").trim());
                             }).map(key => {
                                 return {
@@ -687,10 +670,7 @@ exports.companiesSinc = async(io,res,userData,result) => {
                                 };
                             });
                               
-                            //Si se ha modificado, añadimos la empresa
                             if (SAO_MODIFIED_FIELDS.length > 0) {
-                                console.log(SAO_MODIFIED_FIELDS)
-                                // Si hay campos modificados, añadimos la empresa a updatedCompanies con los campos modificados
                                 const empresaModificada = { ...new SAO_Data_Company(datos.SAO_id, datos.SAO_profile, datos.SAO_username, datos.SAO_registryDate, datos.SAO_accessDate, datos.SAO_name, datos.SAO_organization, null, datos.SAO_email, datos.SAO_phone, datos.SAO_company_FCT_Number, datos.SAO_company_FCT_Date, datos.SAO_company_FPDual_Number, datos.SAO_company_FPDual_Date, datos.SAO_company_fax, datos.SAO_company_city, datos.SAO_company_state, datos.SAO_company_codeState, datos.SAO_company_address, datos.SAO_company_activity, datos.SAO_company_nameManager, datos.SAO_company_idManager, datos.SAO_company_notaryState, datos.SAO_company_notaryCity, datos.SAO_company_notaryName, datos.SAO_company_protocolNumber, datos.SAO_company_deedDate), SAO_MODIFIED_FIELDS };
                                 companiesInfo.updatedCompanies.push(empresaModificada);
                             }                            
@@ -703,36 +683,20 @@ exports.companiesSinc = async(io,res,userData,result) => {
             }
         }
         
-        // 🚀 CIERRE DEFINITIVO DEL NAVEGADOR AL COMPLETAR EL BUCE
-        try {
-            const browserInstance = page.browser();
-            await page.close();
-            await browserInstance.close();
-            console.log("Navegador de Puppeteer cerrado con éxito. RAM liberada.");
-        } catch (closeError) {
-            console.log("Error al intentar cerrar el navegador al final: " + closeError.message);
-        }
+        // 🚀 AVISO FINAL: Emitimos el 100%
+        io.emit('progress-update', { progress: 100, message: "Proceso completado." });
 
-        //res.write('data: {"message": "Proceso completado."}\n\n');
-        //res.end()
-        io.emit('progress-update', { progress:100, message:"Proceso completado." });
-        desconectarSockets(io)       
-        result(null,companiesInfo)
+        // 🚀 SOLUCIÓN: Usamos el setTimeout de promesas nativo que tienes importado arriba
+        // Retornamos los datos inmediatamente para pintar la tabla...
+        result(null, companiesInfo);
+
+        // ...y de forma asíncrona esperamos 2 segundos en segundo plano antes de cerrar los sockets
+        setTimeout(2000).then(() => {
+            console.log("Cerrando sockets de forma diferida...");
+            desconectarSockets(io);
+        }).catch(err => console.log("Error diferido de sockets:", err.message));
 
     } else {
-        // ERROR DE LOGIN: También intentamos cerrar el navegador si loginSAO devolvió la página pero falló algo después
-        if (respLogin.page) {
-            try {
-                const browserInstance = respLogin.page.browser();
-                await respLogin.page.close();
-                await browserInstance.close();
-            } catch (closeError) {
-                console.log("Error cerrando navegador en bloque de error de login: " + closeError.message);
-            }
-        }
-
-        //res.write('data: {"error": "Hubo un error en el proceso."}\n\n');
-        //res.end()
         io.emit('progress-update', { progress:100, message:"Error de login: "  + respLogin.error });
         desconectarSockets(io)       
         result(respLogin.error,null)
