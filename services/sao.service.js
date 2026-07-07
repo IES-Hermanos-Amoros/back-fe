@@ -14,13 +14,13 @@ const userManagerModel = require("../models/userManager.model")
 const fctManagerModel = require("../models/fctManager.model")
 
 //const SAO_Data = require("../models/SAO.model")
-const isProduction = process.env.NODE_ENV === "qa" //'production';
+const isProduction = process.env.NODE_ENV === 'production';
 console.log(process.env.NODE_ENV);
 
 const puppeteerOptions = {
     headless: true, //false para mostrar navegador, true para no mostrarlo
     devtools: false,
-    executablePath: isProduction ? "/usr/bin/chromium-browser" : undefined, //Sólo en producción
+    executablePath: isProduction ? process.env.CHROME_EXECUTABLE_PATH : undefined, //Sólo en producción
     args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
