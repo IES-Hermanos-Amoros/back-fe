@@ -215,6 +215,10 @@ extraerDatosFCT = ($, idFct) => {
 
 loginSAO = async(userData,result) => {
     try {
+        console.log("NODE_ENV:", process.env.NODE_ENV);
+        console.log("isProduction:", isProduction);
+        console.log("Executable:", puppeteerOptions.executablePath);
+        
         const browser = await puppeteer.launch(puppeteerOptions);
         const page = await browser.newPage();
 
