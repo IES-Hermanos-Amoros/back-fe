@@ -14,7 +14,7 @@ const userManagerModel = require("../models/userManager.model")
 const fctManagerModel = require("../models/fctManager.model")
 
 //const SAO_Data = require("../models/SAO.model")
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction = process.env.NODE_ENV === "qa" //'production';
 console.log(process.env.NODE_ENV);
 
 const puppeteerOptions = {
@@ -218,7 +218,7 @@ loginSAO = async(userData,result) => {
         console.log("NODE_ENV:", process.env.NODE_ENV);
         console.log("isProduction:", isProduction);
         console.log("Executable:", puppeteerOptions.executablePath);
-        
+
         const browser = await puppeteer.launch(puppeteerOptions);
         const page = await browser.newPage();
 
