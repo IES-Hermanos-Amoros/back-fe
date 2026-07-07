@@ -1,6 +1,6 @@
 require("dotenv").config()
-const express = require("express");
-const app = express()
+//const express = require("express");
+//const app = express()
 const { parse, format } = require('date-fns');
 const { es } = require('date-fns/locale');
 const {SAO_Data,SAO_Data_Student, SAO_Data_Company, SAO_Data_FCT} = require("../models/SAO.model")
@@ -14,7 +14,8 @@ const userManagerModel = require("../models/userManager.model")
 const fctManagerModel = require("../models/fctManager.model")
 
 //const SAO_Data = require("../models/SAO.model")
-const isProduction = app.get("env") === "production";
+const isProduction = process.env.NODE_ENV === 'production';
+console.log(process.env.NODE_ENV);
 
 const puppeteerOptions = {
     headless: true, //false para mostrar navegador, true para no mostrarlo

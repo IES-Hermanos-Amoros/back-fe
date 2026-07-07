@@ -19,15 +19,23 @@ jobs:
           key: ${{ secrets.AZURE_SSH_KEY }}
 
           script: |
+            set -e
+
             cd ~/back-fe
 
-            echo "Actualizando repositorio..."
-            git pull origin master
+            echo "Obteniendo últimos cambios..."
+            git fetch origin
+
+            echo "Sincronizando con GitHub..."
+            git reset --hard origin/master
 
             echo "Instalando dependencias..."
             npm install
 
-            echo "Reiniciando API..."
-            pm2 restart back-fe --update-env
+            echo "Recargando aplicación..."
+            pm2 reload ecosystem.config.js --env production
 
-            echo "Despliegue completado."
+            echo "Guardando configuración PM2..."
+            pm2 save
+
+            echo "Despliegue completado correctamente."
