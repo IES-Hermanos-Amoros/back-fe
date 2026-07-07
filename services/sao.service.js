@@ -659,7 +659,7 @@ exports.companiesSinc = async(io,res,userData,result) => {
                         datos.SAO_accessDate = stringToDate(companyLink.ultimoAcceso)                        
                         
                         const empresaEnMongo = empresasMongoDB.find(emp => emp.SAO_id === datos.SAO_id);
-                        
+                        console.log("EMPRESA: ", datos.SAO_id, " - ", datos.SAO_name, " - En MongoDB: ", empresaEnMongo ? "Sí" : "No");
                         if(!empresaEnMongo){
                             companiesInfo.newCompanies.push(new SAO_Data_Company(datos.SAO_id, datos.SAO_profile, datos.SAO_username, datos.SAO_registryDate, datos.SAO_accessDate, datos.SAO_name, datos.SAO_organization, null, datos.SAO_email, datos.SAO_phone, datos.SAO_company_FCT_Number, datos.SAO_company_FCT_Date, datos.SAO_company_FPDual_Number, datos.SAO_company_FPDual_Date, datos.SAO_company_fax, datos.SAO_company_city, datos.SAO_company_state, datos.SAO_company_codeState, datos.SAO_company_address, datos.SAO_company_activity, datos.SAO_company_nameManager, datos.SAO_company_idManager, datos.SAO_company_notaryState, datos.SAO_company_notaryCity, datos.SAO_company_notaryName, datos.SAO_company_protocolNumber, datos.SAO_company_deedDate));
                         } else {
@@ -698,6 +698,12 @@ exports.companiesSinc = async(io,res,userData,result) => {
 
         // 🚀 SOLUCIÓN: Usamos el setTimeout de promesas nativo que tienes importado arriba
         // Retornamos los datos inmediatamente para pintar la tabla...
+        const json = JSON.stringify(companiesInfo);
+        console.log("Tamaño JSON:", json.length / 1024, "KB");
+        console.log(
+            companiesInfo.newCompanies.length,
+            companiesInfo.updatedCompanies.length
+        );
         result(null, companiesInfo);
 
         // ...y de forma asíncrona esperamos 2 segundos en segundo plano antes de cerrar los sockets

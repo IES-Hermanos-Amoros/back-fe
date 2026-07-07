@@ -57,7 +57,11 @@ exports.companies = (io) => wrapAsync(async (req,res,next)=>{
         if(err){
             next(new AppError(err,404))
         }else{
-            res.status(200).json(companyList)            
+            console.log("ANTES DEL RES.JSON");
+            console.log("headersSent:", res.headersSent);
+            console.log("writableEnded:", res.writableEnded);
+            res.status(200).json(companyList)      
+            console.log("DESPUÉS DEL RES.JSON");      
         }
     })
 })

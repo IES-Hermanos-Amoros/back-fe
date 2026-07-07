@@ -65,6 +65,11 @@ const server =
     ? startHTTPS(app, port, keySSL, crtSSL)
     : startHTTP(app, port);
 
+// Evitar timeout en procesos largos
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+server.keepAliveTimeout = 120000;
+
 // Inicializar Socket.IO sobre el mismo server
 const io = socketIo(server, {
   cors: { 
