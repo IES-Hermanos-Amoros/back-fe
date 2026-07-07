@@ -112,6 +112,10 @@ app.use(`/api/${process.env.API_VERSION}/categories`, categoryRoutes);
 app.use(`/api/${process.env.API_VERSION}/stats`, statsRoutes);
 
 //console.cron-job.org (Cron Job)
+app.get('/', (req, res) => {
+    res.send('Bienvenido al API de F.E. Manager. Para ver la documentación, accede a /api-docs');
+});
+
 app.get('/ping', (req, res) => {
     res.send('¡Estoy despierto!');
 });
