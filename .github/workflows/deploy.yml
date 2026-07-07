@@ -32,8 +32,8 @@ jobs:
             echo "Instalando dependencias..."
             npm install
 
-            echo "Recargando aplicación..."
-            pm2 reload ecosystem.config.js --env production
+            echo "Reiniciando aplicación..."
+            pm2 restart back-fe
 
             echo "Guardando configuración PM2..."
             pm2 save
