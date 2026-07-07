@@ -1,0 +1,33 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Desplegar en Azure VM
+        uses: appleboy/ssh-action@v1.2.2
+
+        with:
+          host: ${{ secrets.AZURE_HOST }}
+          username: ${{ secrets.AZURE_USER }}
+          key: ${{ secrets.AZURE_SSH_KEY }}
+
+          script: |
+            cd ~/back-fe
+
+            echo "Actualizando repositorio..."
+            git pull origin master
+
+            echo "Instalando dependencias..."
+            npm install
+
+            echo "Reiniciando API..."
+            pm2 restart back-fe --update-env
+
+            echo "Despliegue completado."
