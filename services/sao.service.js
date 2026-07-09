@@ -212,7 +212,7 @@ extraerDatosFCT = ($, idFct) => {
     return datos;
 };
 
-loginSAO = async (userData) => {
+loginSAO_NO_FUNCIONA = async (userData) => {
 
     let browser = null;
 
@@ -299,7 +299,7 @@ loginSAO = async (userData) => {
 
 };
 
-loginSAO_OLD = async(userData,result) => {
+loginSAO = async(userData,result) => {
     try {
         console.log("NODE_ENV:", process.env.NODE_ENV);
         console.log("isProduction:", isProduction);
@@ -681,7 +681,7 @@ exports.loginService = async(userData,result) => {
 }
 
 //----------------------------------------------------------------
-exports.companiesSinc = async(io, res, userData, result) => {
+exports.companiesSinc_NO_FUNCIONA = async(io, res, userData, result) => {
 
     const respLogin = await loginSAO(userData);
 
@@ -828,7 +828,7 @@ exports.companiesSinc = async(io, res, userData, result) => {
 
 }
 
-exports.companiesSinc_OLD = async(io,res,userData,result) => {
+exports.companiesSinc = async(io,res,userData,result) => {
     const respLogin = await loginSAO(userData) 
     
     if(respLogin.ok) {          
