@@ -212,8 +212,137 @@ extraerDatosFCT = ($, idFct) => {
     return datos;
 };
 
+loginSAO = async(userData) => {
 
-loginSAO = async(userData,result) => {
+    // 🚀 Declaramos browser fuera del try para poder cerrarlo también en el catch
+    let browser = null;
+
+    try {
+
+        console.log("NODE_ENV:", process.env.NODE_ENV);
+        console.log("isProduction:", isProduction);
+        console.log("Executable:", puppeteerOptions.executablePath);
+
+        // 🚀 Guardamos la instancia del navegador
+        browser = await puppeteer.launch(puppeteerOptions);
+
+        // 🚀 Creamos una nueva pestaña
+        const page = await browser.newPage();
+
+        // 🚀 Bloqueamos recursos innecesarios para ahorrar RAM
+        await page.setRequestInterception(true);
+
+        page.on('request', (req) => {
+
+            const resourceType = req.resourceType();
+
+            if (['image','stylesheet','font','media','analytics'].includes(resourceType)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+
+        });
+
+        // 🚀 Abrimos SAO
+        await page.goto(urlBase + 'index.php', {
+            waitUntil: 'networkidle2'
+        });
+
+        await eliminarCookies(page);
+
+        console.log(userData);
+
+        // 🚀 Escribimos usuario
+        await page.type('input[name=usuario]', userData.username);
+
+        // 🚀 Escribimos contraseña
+        await page.type('input[name=password]', userData.password);
+
+        // 🚀 Pulsamos Login
+        await page.click('input[name=login]');
+
+        try {
+
+            // Esperamos 3 segundos por si aparece el mensaje de error
+            await page.waitForSelector('#div_error_login p', {
+                timeout: 3000
+            });
+
+            const errorMessage = await page.evaluate(() => {
+
+                const errorParagraph = document.querySelector('#div_error_login p');
+
+                return errorParagraph
+                    ? errorParagraph.innerText
+                    : null;
+
+            });
+
+            // 🚀 Si hay mensaje de error, cerramos el navegador
+            if (errorMessage) {
+
+                console.log("❌ Error detectado:", errorMessage);
+
+                // 🚀 IMPORTANTE
+                await browser.close();
+
+                return {
+                    ok:false,
+                    error:errorMessage,
+                    page:null,
+                    browser:null
+                };
+
+            }
+
+        }
+        catch {
+
+            // 🚀 Si waitForSelector lanza timeout, significa que NO existe el error y el login ha sido correcto
+
+            console.log("✅ Login exitoso.");
+
+            return {
+                ok:true,
+                error:null,
+
+                // 🚀 DEVOLVEMOS LOS DOS
+                page,
+                browser
+            };
+
+        }
+
+    }
+    catch(error){
+
+        console.log("❌ Error detectado:", error.message);
+
+        // 🚀 Si el navegador llegó a abrirse lo cerramos SIEMPRE
+        if(browser){
+
+            try{
+                await browser.close();
+            }
+            catch(closeError){
+                console.log("Error cerrando Chromium:", closeError.message);
+            }
+
+        }
+
+        return {
+            ok:false,
+            error:error.message,
+            page:null,
+            browser:null
+        };
+
+    }
+
+}
+
+loginSAO_OLD = async(userData,result) => {
     try {
         console.log("NODE_ENV:", process.env.NODE_ENV);
         console.log("isProduction:", isProduction);
@@ -595,9 +724,156 @@ exports.loginService = async(userData,result) => {
 }
 
 //----------------------------------------------------------------
-exports.companiesSinc = async(io,res,userData,result) => {
-    const respLogin = await loginSAO(userData) 
+exports.companiesSinc = async(io, res, userData, result) => {
 
+    const respLogin = await loginSAO(userData);
+
+    // Si falla el login salimos inmediatamente
+    if (!respLogin.ok) {
+        io.emit('progress-update', {
+            progress: 100,
+            message: "Error de login: " + respLogin.error
+        });
+
+        desconectarSockets(io);
+        return result(respLogin.error, null);
+    }
+
+    // Recuperamos la página
+    const page = respLogin.page;
+
+    try {
+
+        // ==========================================================
+        // TODO TU CÓDIGO ACTUAL
+        // (NO CAMBIAR NADA)
+        // ==========================================================
+
+        let progress = 0;
+
+        const empresasMongoDB = await userManagerModel.findByFilter({
+            SAO_profile: "EMPRESA"
+        });
+
+        console.log("Empresas en MongoDB:", empresasMongoDB.length);
+
+        io.emit('progress-update', {
+            progress,
+            message: `Empresas en MongoDB: ${empresasMongoDB.length}`
+        });
+
+        const companiesLinks = await getSAOCompaniesLinks(page);
+
+        console.log("Empresas en SAO:", companiesLinks.length);
+
+        io.emit('progress-update', {
+            progress,
+            message: `Empresas en SAO: ${companiesLinks.length}`
+        });
+
+        let incremento = 100 / companiesLinks.length;
+
+        let companiesInfo = {
+            newCompanies: [],
+            updatedCompanies: []
+        };
+
+        let linkCounter = 0;
+        let ultimoProgresoEmitido = 0;
+
+        for (let companyLink of companiesLinks) {
+
+            try {
+
+                // ---------- TU CÓDIGO TAL CUAL ----------
+
+            }
+            catch (error) {
+
+                console.log(
+                    "Error leyendo empresa:",
+                    companyLink.link,
+                    error.message
+                );
+
+                io.emit('progress-update', {
+                    progress,
+                    message: error.message
+                });
+
+            }
+
+        }
+
+        io.emit('progress-update', {
+            progress: 100,
+            message: "Proceso completado."
+        });
+
+        const json = JSON.stringify(companiesInfo);
+
+        console.log("Tamaño JSON:", json.length / 1024, "KB");
+
+        result(null, companiesInfo);
+
+        setTimeout(2000)
+            .then(() => {
+                console.log("Cerrando sockets...");
+                desconectarSockets(io);
+            });
+
+    }
+    catch (error) {
+
+        // ==========================================================
+        // ERROR GENERAL DEL PROCESO
+        // ==========================================================
+
+        console.error("Error general:", error);
+
+        io.emit('progress-update', {
+            progress: 100,
+            message: error.message
+        });
+
+        result(error.message, null);
+
+    }
+    finally {
+
+        // ==========================================================
+        // SIEMPRE SE EJECUTA
+        // ==========================================================
+
+        try {
+
+            if (respLogin.browser) {
+
+                console.log("Cerrando Chromium...");
+
+                await respLogin.browser.close();
+
+                console.log("Chromium cerrado.");
+
+            }
+
+        }
+        catch (e) {
+
+            console.log(
+                "Error cerrando Chromium:",
+                e.message
+            );
+
+        }
+
+    }
+
+}
+
+exports.companiesSinc_OLD = async(io,res,userData,result) => {
+    const respLogin = await loginSAO(userData) 
+    
     if(respLogin.ok) {          
         let progress = 0;    
         const empresasMongoDB = await userManagerModel.findByFilter({SAO_profile:"EMPRESA"})
@@ -719,7 +995,7 @@ exports.companiesSinc = async(io,res,userData,result) => {
     }  
 }
 
-exports.companiesSinc_OLD = async(io,res,userData,result) => {
+exports.companiesSinc_OLD_MUY_OLD = async(io,res,userData,result) => {
     //res.write('Login...\n');
     //res.write('data: {"message": "Login..."}\n\n');
     const respLogin = await loginSAO(userData) 
