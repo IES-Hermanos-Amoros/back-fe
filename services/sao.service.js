@@ -212,9 +212,8 @@ extraerDatosFCT = ($, idFct) => {
     return datos;
 };
 
-loginSAO = async(userData) => {
+loginSAO = async (userData) => {
 
-    // 🚀 Declaramos browser fuera del try para poder cerrarlo también en el catch
     let browser = null;
 
     try {
@@ -223,124 +222,82 @@ loginSAO = async(userData) => {
         console.log("isProduction:", isProduction);
         console.log("Executable:", puppeteerOptions.executablePath);
 
-        // 🚀 Guardamos la instancia del navegador
         browser = await puppeteer.launch(puppeteerOptions);
-
-        // 🚀 Creamos una nueva pestaña
         const page = await browser.newPage();
 
-        // 🚀 Bloqueamos recursos innecesarios para ahorrar RAM
+        // Bloqueo de recursos innecesarios
         await page.setRequestInterception(true);
-
-        page.on('request', (req) => {
-
-            const resourceType = req.resourceType();
-
-            if (['image','stylesheet','font','media','analytics'].includes(resourceType)) {
+        page.on("request", req => {
+            const type = req.resourceType();
+            if (["image", "stylesheet", "font", "media", "analytics"].includes(type))
                 req.abort();
-            } else {
+            else
                 req.continue();
-            }
-
         });
 
-        // 🚀 Abrimos SAO
-        await page.goto(urlBase + 'index.php', {
-            waitUntil: 'networkidle2'
-        });
-
+        await page.goto(urlBase + "index.php", { waitUntil: "networkidle2" });
         await eliminarCookies(page);
 
         console.log(userData);
 
-        // 🚀 Escribimos usuario
-        await page.type('input[name=usuario]', userData.username);
-
-        // 🚀 Escribimos contraseña
-        await page.type('input[name=password]', userData.password);
-
-        // 🚀 Pulsamos Login
-        await page.click('input[name=login]');
+        await page.type("input[name=usuario]", userData.username);
+        await page.type("input[name=password]", userData.password);
+        await page.click("input[name=login]");
 
         try {
 
-            // Esperamos 3 segundos por si aparece el mensaje de error
-            await page.waitForSelector('#div_error_login p', {
-                timeout: 3000
-            });
+            // Si aparece este selector es que el login ha fallado
+            await page.waitForSelector("#div_error_login p", { timeout: 3000 });
 
-            const errorMessage = await page.evaluate(() => {
+            const errorMessage = await page.$eval("#div_error_login p", el => el.innerText);
 
-                const errorParagraph = document.querySelector('#div_error_login p');
+            console.log("❌ Error detectado:", errorMessage);
 
-                return errorParagraph
-                    ? errorParagraph.innerText
-                    : null;
+            await browser.close();
 
-            });
+            return {
+                ok: false,
+                error: errorMessage,
+                page: null,
+                browser: null
+            };
 
-            // 🚀 Si hay mensaje de error, cerramos el navegador
-            if (errorMessage) {
+        } catch {
 
-                console.log("❌ Error detectado:", errorMessage);
-
-                // 🚀 IMPORTANTE
-                await browser.close();
-
-                return {
-                    ok:false,
-                    error:errorMessage,
-                    page:null,
-                    browser:null
-                };
-
-            }
-
-        }
-        catch {
-
-            // 🚀 Si waitForSelector lanza timeout, significa que NO existe el error y el login ha sido correcto
-
+            // Timeout => no apareció el error => login correcto
             console.log("✅ Login exitoso.");
 
             return {
-                ok:true,
-                error:null,
-
-                // 🚀 DEVOLVEMOS LOS DOS
+                ok: true,
+                error: null,
                 page,
                 browser
             };
 
         }
 
-    }
-    catch(error){
+    } catch (error) {
 
         console.log("❌ Error detectado:", error.message);
 
-        // 🚀 Si el navegador llegó a abrirse lo cerramos SIEMPRE
-        if(browser){
-
-            try{
+        if (browser) {
+            try {
                 await browser.close();
-            }
-            catch(closeError){
+            } catch (closeError) {
                 console.log("Error cerrando Chromium:", closeError.message);
             }
-
         }
 
         return {
-            ok:false,
-            error:error.message,
-            page:null,
-            browser:null
+            ok: false,
+            error: error.message,
+            page: null,
+            browser: null
         };
 
     }
 
-}
+};
 
 loginSAO_OLD = async(userData,result) => {
     try {
