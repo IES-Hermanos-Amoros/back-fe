@@ -60,8 +60,18 @@ exports.companies = (io) => wrapAsync(async (req,res,next)=>{
             console.log("ANTES DEL RES.JSON");
             console.log("headersSent:", res.headersSent);
             console.log("writableEnded:", res.writableEnded);
-            res.status(200).json(companyList)      
-            console.log("DESPUÉS DEL RES.JSON");      
+
+            res.status(200).json(companyList);
+
+            console.log("JSON enviado");
+            console.log("headersSent:", res.headersSent);
+            console.log("writableEnded:", res.writableEnded);
+
+            res.end();
+
+            console.log("DESPUÉS DEL RES.END");
+            console.log("headersSent:", res.headersSent);
+            console.log("writableEnded:", res.writableEnded);         
         }
     })
 })
