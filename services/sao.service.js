@@ -942,7 +942,7 @@ exports.companiesSinc = async(io,res,userData,result) => {
         // ...y de forma asíncrona esperamos 2 segundos en segundo plano antes de cerrar los sockets
         setTimeout(2000).then(() => {
             console.log("Cerrando sockets de forma diferida...");
-            desconectarSockets(io);
+            //desconectarSockets(io);
         }).catch(err => console.log("Error diferido de sockets:", err.message));
 
     } else {
@@ -1091,9 +1091,230 @@ exports.companiesSinc_OLD_MUY_OLD = async(io,res,userData,result) => {
     }  
 }
 
+exports.teachersSinc = async (io, res, userData, result) => {
 
+    const respLogin = await loginSAO(userData);
 
-exports.teachersSinc = async(io,res,userData,result) => {
+    if (respLogin.ok) {
+
+        let progress = 0;
+
+        const profesMongoDB = await userManagerModel.findByFilter({
+            SAO_profile: { $in: ["PROFESOR", "ADMINISTRADOR"] }
+        });
+
+        console.log("Profesores en MongoDB:", profesMongoDB.length);
+        io.emit('progress-update', {
+            progress,
+            message: `Profesores en MongoDB: ${profesMongoDB.length}`
+        });
+
+        const page = respLogin.page;
+
+        const teachersLinks = await getSAOTeachersLinks(page);
+
+        console.log("Profesores en SAO:", teachersLinks.length);
+
+        io.emit('progress-update', {
+            progress,
+            message: `Profesores en SAO: ${teachersLinks.length}`
+        });
+
+        const incremento = 100 / teachersLinks.length;
+
+        const teachersInfo = {
+            newTeachers: [],
+            updatedTeachers: []
+        };
+
+        let linkCounter = 0;
+        let ultimoProgresoEmitido = 0;
+
+        for (const teacherLink of teachersLinks) {
+
+            try {
+
+                if (teacherLink.link) {
+
+                    linkCounter++;
+
+                    // 🚀 Limpieza de caché cada 20 páginas
+                    if (linkCounter % 20 === 0) {
+
+                        console.log("Limpiando caché de la pestaña para liberar memoria RAM...");
+
+                        try {
+
+                            const client = await page.target().createCDPSession();
+
+                            await client.send("Network.clearBrowserCache");
+                            await client.detach();
+
+                        } catch (cacheError) {
+
+                            console.log("No se pudo limpiar la caché: " + cacheError.message);
+
+                        }
+
+                    }
+
+                    await page.goto(teacherLink.link, {
+                        waitUntil: "networkidle2"
+                    });
+
+                    const content = await page.content();
+                    const $ = cheerio.load(content);
+
+                    const datos = extraerDatosProfesorAdmin($);
+
+                    // Caso especial: ficha vacía
+                    if (datos && datos.SAO_id && datos.SAO_id !== "") {
+
+                        progress += incremento;
+
+                        // 🚀 Sólo emitimos cuando cambia el entero
+                        if (Math.floor(progress) > ultimoProgresoEmitido) {
+
+                            ultimoProgresoEmitido = Math.floor(progress);
+
+                            io.emit("progress-update", {
+                                progress: ultimoProgresoEmitido,
+                                message: `Cargando profesor '${datos.SAO_profile}: ${datos.SAO_id} ${datos.SAO_name}'...`
+                            });
+
+                        }
+
+                        const profeEnMongo = profesMongoDB.find(
+                            profe => profe.SAO_id === datos.SAO_id
+                        );
+
+                        if (!profeEnMongo) {
+
+                            teachersInfo.newTeachers.push(
+                                new SAO_Data(
+                                    datos.SAO_id,
+                                    datos.SAO_profile,
+                                    datos.SAO_username,
+                                    datos.SAO_registryDate,
+                                    datos.SAO_accessDate,
+                                    datos.SAO_name,
+                                    datos.SAO_organization,
+                                    datos.SAO_group,
+                                    datos.SAO_email,
+                                    datos.SAO_phone
+                                )
+                            );
+
+                        } else {
+
+                            const SAO_MODIFIED_FIELDS = Object.keys(datos)
+                                .filter(key => {
+
+                                    if (profeEnMongo[key] instanceof Date) {
+
+                                        const fechaDatos = new Date(datos[key]);
+
+                                        if (isNaN(fechaDatos)) {
+
+                                            return String(profeEnMongo[key]).trim() !== String(datos[key]).trim();
+
+                                        }
+
+                                        return profeEnMongo[key].getTime() !== fechaDatos.getTime();
+
+                                    }
+
+                                    return String(profeEnMongo[key] || "").trim() !== String(datos[key] || "").trim();
+
+                                })
+                                .map(key => ({
+                                    field: key,
+                                    DB_Value: profeEnMongo[key],
+                                    SAO_Value: datos[key]
+                                }));
+
+                            if (SAO_MODIFIED_FIELDS.length > 0) {
+
+                                teachersInfo.updatedTeachers.push({
+                                    ...new SAO_Data(
+                                        datos.SAO_id,
+                                        datos.SAO_profile,
+                                        datos.SAO_username,
+                                        datos.SAO_registryDate,
+                                        datos.SAO_accessDate,
+                                        datos.SAO_name,
+                                        datos.SAO_organization,
+                                        datos.SAO_group,
+                                        datos.SAO_email,
+                                        datos.SAO_phone
+                                    ),
+                                    SAO_MODIFIED_FIELDS
+                                });
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            } catch (error) {
+
+                console.log("Error leyendo un profesor:", teacherLink.link, error.message);
+
+                io.emit("progress-update", {
+                    progress,
+                    message: "Error leyendo info de profesor: " + teacherLink.link + ". Desc: " + error.message
+                });
+
+            }
+
+        }
+
+        io.emit("progress-update", {
+            progress: 100,
+            message: "Proceso completado."
+        });
+
+        const json = JSON.stringify(teachersInfo);
+
+        console.log("Tamaño JSON:", json.length / 1024, "KB");
+        console.log(
+            teachersInfo.newTeachers.length,
+            teachersInfo.updatedTeachers.length
+        );
+
+        result(null, teachersInfo);
+
+        // Cerramos sockets unos segundos después para no cortar la respuesta HTTP
+        setTimeout(2000).then(() => {
+
+            console.log("Cerrando sockets de forma diferida...");
+            desconectarSockets(io);
+
+        }).catch(err => {
+
+            console.log("Error diferido de sockets:", err.message);
+
+        });
+
+    } else {
+
+        io.emit("progress-update", {
+            progress: 100,
+            message: "Error de login: " + respLogin.error
+        });
+
+        desconectarSockets(io);
+
+        result(respLogin.error, null);
+
+    }
+
+};
+
+exports.teachersSinc_OLD = async(io,res,userData,result) => {
     const respLogin = await loginSAO(userData) 
 
     if(respLogin.ok) {          
@@ -1200,8 +1421,246 @@ exports.teachersSinc = async(io,res,userData,result) => {
     }  
 }
 
+exports.studentsSinc = async (io, res, userData, result) => {
 
-exports.studentsSinc = async(io,res,userData,result) => {
+    const respLogin = await loginSAO(userData);
+
+    if (respLogin.ok) {
+
+        let progress = 0;
+
+        const alusMongoDB = await userManagerModel.findByFilter({ SAO_profile: "ALUMNO" });
+
+        console.log("Alumnos en MongoDB:", alusMongoDB.length);
+
+        io.emit("progress-update", {
+            progress,
+            message: `Alumnos en MongoDB: ${alusMongoDB.length}`
+        });
+
+        const page = respLogin.page;
+
+        const studentsLinks = await getSAOStudentsLinks(page);
+
+        console.log("Alumnos en SAO:", studentsLinks.length);
+
+        io.emit("progress-update", {
+            progress,
+            message: `Alumnos en SAO: ${studentsLinks.length}`
+        });
+
+        const incremento = 100 / studentsLinks.length;
+
+        const studentsInfo = {
+            newStudents: [],
+            updatedStudents: []
+        };
+
+        let linkCounter = 0;
+        let ultimoProgresoEmitido = 0;
+
+        for (const studentLink of studentsLinks) {
+
+            try {
+
+                if (studentLink.link) {
+
+                    linkCounter++;
+
+                    // 🚀 Limpieza de caché cada 20 alumnos
+                    if (linkCounter % 20 === 0) {
+
+                        console.log("Limpiando caché de la pestaña para liberar memoria RAM...");
+
+                        try {
+
+                            const client = await page.target().createCDPSession();
+
+                            await client.send("Network.clearBrowserCache");
+                            await client.detach();
+
+                        } catch (cacheError) {
+
+                            console.log("No se pudo limpiar la caché: " + cacheError.message);
+
+                        }
+
+                    }
+
+                    await page.goto(studentLink.link, {
+                        waitUntil: "networkidle2"
+                    });
+
+                    const content = await page.content();
+                    const $ = cheerio.load(content);
+
+                    const datos = extraerDatosAlumno($);
+
+                    if (datos) {
+
+                        progress += incremento;
+
+                        // 🚀 Emitimos sólo cuando cambia el porcentaje entero
+                        if (Math.floor(progress) > ultimoProgresoEmitido) {
+
+                            ultimoProgresoEmitido = Math.floor(progress);
+
+                            io.emit("progress-update", {
+                                progress: ultimoProgresoEmitido,
+                                message: `Cargando alumno '${datos.SAO_id} ${datos.SAO_name}'...`
+                            });
+
+                        }
+
+                        const aluEnMongo = alusMongoDB.find(
+                            alu => alu.SAO_id === datos.SAO_id
+                        );
+
+                        if (!aluEnMongo) {
+
+                            studentsInfo.newStudents.push(
+                                new SAO_Data_Student(
+                                    datos.SAO_id,
+                                    datos.SAO_profile,
+                                    datos.SAO_username,
+                                    datos.SAO_registryDate,
+                                    datos.SAO_accessDate,
+                                    datos.SAO_name,
+                                    datos.SAO_organization,
+                                    datos.SAO_group,
+                                    datos.SAO_email,
+                                    datos.SAO_phone,
+                                    datos.SAO_student_id,
+                                    datos.SAO_student_socialNumber,
+                                    datos.SAO_student_city,
+                                    datos.SAO_student_state,
+                                    datos.SAO_student_codeState,
+                                    datos.SAO_student_address,
+                                    datos.SAO_student_gender,
+                                    datos.SAO_student_visibleCompanies
+                                )
+                            );
+
+                        } else {
+
+                            const SAO_MODIFIED_FIELDS = Object.keys(datos)
+                                .filter(key => {
+
+                                    if (aluEnMongo[key] instanceof Date) {
+
+                                        const fechaDatos = new Date(datos[key]);
+
+                                        if (isNaN(fechaDatos)) {
+
+                                            return String(aluEnMongo[key]).trim() !== String(datos[key]).trim();
+
+                                        }
+
+                                        return aluEnMongo[key].getTime() !== fechaDatos.getTime();
+
+                                    }
+
+                                    return String(aluEnMongo[key] || "").trim() !== String(datos[key] || "").trim();
+
+                                })
+                                .map(key => ({
+                                    field: key,
+                                    DB_Value: aluEnMongo[key],
+                                    SAO_Value: datos[key]
+                                }));
+
+                            if (SAO_MODIFIED_FIELDS.length > 0) {
+
+                                studentsInfo.updatedStudents.push({
+
+                                    ...new SAO_Data_Student(
+                                        datos.SAO_id,
+                                        datos.SAO_profile,
+                                        datos.SAO_username,
+                                        datos.SAO_registryDate,
+                                        datos.SAO_accessDate,
+                                        datos.SAO_name,
+                                        datos.SAO_organization,
+                                        datos.SAO_group,
+                                        datos.SAO_email,
+                                        datos.SAO_phone,
+                                        datos.SAO_student_id,
+                                        datos.SAO_student_socialNumber,
+                                        datos.SAO_student_city,
+                                        datos.SAO_student_state,
+                                        datos.SAO_student_codeState,
+                                        datos.SAO_student_address,
+                                        datos.SAO_student_gender,
+                                        datos.SAO_student_visibleCompanies
+                                    ),
+
+                                    SAO_MODIFIED_FIELDS
+
+                                });
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            } catch (error) {
+
+                console.log("Error leyendo un alumno:", studentLink.link, error.message);
+
+                io.emit("progress-update", {
+                    progress,
+                    message: "Error leyendo info de alumno: " + studentLink.link + ". Desc: " + error.message
+                });
+
+            }
+
+        }
+
+        io.emit("progress-update", {
+            progress: 100,
+            message: "Proceso completado."
+        });
+
+        const json = JSON.stringify(studentsInfo);
+
+        console.log("Tamaño JSON:", json.length / 1024, "KB");
+        console.log(
+            studentsInfo.newStudents.length,
+            studentsInfo.updatedStudents.length
+        );
+
+        result(null, studentsInfo);
+
+        setTimeout(2000).then(() => {
+
+            console.log("Cerrando sockets de forma diferida...");
+            desconectarSockets(io);
+
+        }).catch(err => {
+
+            console.log("Error diferido de sockets:", err.message);
+
+        });
+
+    } else {
+
+        io.emit("progress-update", {
+            progress: 100,
+            message: "Error de login: " + respLogin.error
+        });
+
+        desconectarSockets(io);
+
+        result(respLogin.error, null);
+
+    }
+
+};
+
+exports.studentsSinc_OLD = async(io,res,userData,result) => {
     const respLogin = await loginSAO(userData) 
 
     if(respLogin.ok) {          
@@ -1304,8 +1763,243 @@ exports.studentsSinc = async(io,res,userData,result) => {
     }  
 }
 
-
 exports.FCTSinc = async(io,res,userData,result) => {
+
+    const respLogin = await loginSAO(userData);
+
+    if(respLogin.ok){
+
+        let progress = 0;
+
+        const page = respLogin.page;
+
+        const fctLinks = await getSAOFCTLinks(page,userData.todasFCTs);
+
+        const fctsMongoDB = await fctManagerModel.findByFilter({});
+
+        console.log("FCTs en MongoDB:",fctsMongoDB.length);
+        io.emit('progress-update',{progress,message:`FCTs en MongoDB: ${fctsMongoDB.length}`});
+
+        console.log("FCTs en SAO:",fctLinks.length);
+        io.emit('progress-update',{progress,message:`FCTs en SAO: ${fctLinks.length}`});
+
+        const incremento = 100 / fctLinks.length;
+
+        const FCTInfo = {
+            newFCT:[],
+            updatedFCT:[]
+        };
+
+        let linkCounter = 0;
+        let ultimoProgresoEmitido = 0;
+
+        for(const fctLink of fctLinks){
+
+            try{
+
+                if(!fctLink.link) continue;
+
+                linkCounter++;
+
+                // 🚀 Limpieza de memoria cada 20 FCTs
+                if(linkCounter % 20 === 0){
+
+                    console.log("Limpiando caché de la pestaña para liberar memoria RAM...");
+
+                    try{
+
+                        const client = await page.target().createCDPSession();
+
+                        await client.send("Network.clearBrowserCache");
+
+                        await client.detach();
+
+                    }catch(cacheError){
+
+                        console.log("No se pudo limpiar la caché: " + cacheError.message);
+
+                    }
+
+                }
+
+                await page.goto(fctLink.link,{waitUntil:"networkidle2"});
+
+                const content = await page.content();
+
+                const $ = cheerio.load(content);
+
+                const datos = extraerDatosFCT($,fctLink.idFct);
+
+                if(datos){
+
+                    progress += incremento;
+
+                    if(Math.floor(progress) > ultimoProgresoEmitido){
+
+                        ultimoProgresoEmitido = Math.floor(progress);
+
+                        io.emit("progress-update",{
+                            progress:ultimoProgresoEmitido,
+                            message:`Cargando FCT '${datos.SAO_fct_id} NIA: ${datos.SAO_student_id} CIF: ${datos.SAO_company_id} Tutor NIF: ${datos.SAO_teacher_id}'...`
+                        });
+
+                    }
+
+                    const fctEnMongo = fctsMongoDB.find(fct => fct.SAO_fct_id === datos.SAO_fct_id);
+
+                    if(!fctEnMongo){
+
+                        FCTInfo.newFCT.push(
+                            new SAO_Data_FCT(
+                                datos.SAO_fct_id,
+                                datos.SAO_student_course,
+                                datos.SAO_student_id,
+                                datos.SAO_company_id,
+                                datos.SAO_workcenter_name,
+                                datos.SAO_workcenter_phone,
+                                datos.SAO_workcenter_manager,
+                                datos.SAO_workcenter_manager_id,
+                                datos.SAO_workcenter_city,
+                                datos.SAO_workcenter_email,
+                                datos.SAO_teacher_id,
+                                datos.SAO_instructor_name,
+                                datos.SAO_instructor_id,
+                                datos.SAO_period,
+                                datos.SAO_dates,
+                                datos.SAO_schedule,
+                                datos.SAO_hours,
+                                datos.SAO_department,
+                                datos.SAO_type,
+                                datos.SAO_Authorization,
+                                datos.SAO_Erasmus,
+                                datos.SAO_termination_date,
+                                datos.SAO_instructor_assessment,
+                                datos.SAO_observation,
+                                datos.SAO_variation,
+                                datos.SAO_link,
+                                datos.SAO_amount
+                            )
+                        );
+
+                    }else{
+
+                        const SAO_MODIFIED_FIELDS = Object.keys(datos)
+                        .filter(key=>{
+
+                            if(fctEnMongo[key] instanceof Date){
+
+                                const fechaDatos = new Date(datos[key]);
+
+                                if(isNaN(fechaDatos)){
+                                    return String(fctEnMongo[key]).trim() !== String(datos[key]).trim();
+                                }
+
+                                return fctEnMongo[key].getTime() !== fechaDatos.getTime();
+
+                            }
+
+                            return String(fctEnMongo[key] || "").trim() !== String(datos[key] || "").trim();
+
+                        })
+                        .map(key=>({
+                            field:key,
+                            DB_Value:fctEnMongo[key],
+                            SAO_Value:datos[key]
+                        }));
+
+                        if(SAO_MODIFIED_FIELDS.length>0){
+
+                            const fctModificada={
+                                ...new SAO_Data_FCT(
+                                    datos.SAO_fct_id,
+                                    datos.SAO_student_course,
+                                    datos.SAO_student_id,
+                                    datos.SAO_company_id,
+                                    datos.SAO_workcenter_name,
+                                    datos.SAO_workcenter_phone,
+                                    datos.SAO_workcenter_manager,
+                                    datos.SAO_workcenter_manager_id,
+                                    datos.SAO_workcenter_city,
+                                    datos.SAO_workcenter_email,
+                                    datos.SAO_teacher_id,
+                                    datos.SAO_instructor_name,
+                                    datos.SAO_instructor_id,
+                                    datos.SAO_period,
+                                    datos.SAO_dates,
+                                    datos.SAO_schedule,
+                                    datos.SAO_hours,
+                                    datos.SAO_department,
+                                    datos.SAO_type,
+                                    datos.SAO_Authorization,
+                                    datos.SAO_Erasmus,
+                                    datos.SAO_termination_date,
+                                    datos.SAO_instructor_assessment,
+                                    datos.SAO_observation,
+                                    datos.SAO_variation,
+                                    datos.SAO_link,
+                                    datos.SAO_amount
+                                ),
+                                SAO_MODIFIED_FIELDS
+                            };
+
+                            FCTInfo.updatedFCT.push(fctModificada);
+
+                        }
+
+                    }
+
+                }
+
+            }catch(error){
+
+                console.log("Error leyendo una FCT: " + fctLink.link + ". Desc: " + error.message);
+
+                io.emit("progress-update",{
+                    progress,
+                    message:"Error leyendo una FCT: " + fctLink.link + ". Desc: " + error.message
+                });
+
+            }
+
+        }
+
+        io.emit("progress-update",{
+            progress:100,
+            message:"Proceso completado."
+        });
+
+        const FCTInfoPopulate = await populateFCTInfo(FCTInfo);
+
+        const json = JSON.stringify(FCTInfoPopulate);
+
+        console.log("Tamaño JSON:",json.length/1024,"KB");
+        console.log(FCTInfo.newFCT.length,FCTInfo.updatedFCT.length);
+
+        result(null,FCTInfoPopulate);
+
+        setTimeout(2000).then(()=>{
+
+            console.log("Cerrando sockets de forma diferida...");
+            desconectarSockets(io);
+
+        }).catch(err=>console.log("Error diferido de sockets:",err.message));
+
+    }else{
+
+        io.emit("progress-update",{
+            progress:100,
+            message:"Error de login: " + respLogin.error
+        });
+
+        desconectarSockets(io);
+
+        result(respLogin.error,null);
+
+    }
+
+};
+
+exports.FCTSinc_OLD = async(io,res,userData,result) => {
     const respLogin = await loginSAO(userData) 
 
     if(respLogin.ok) {          
